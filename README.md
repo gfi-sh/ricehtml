@@ -32,7 +32,7 @@ freeze the UI.
 
 ```toml
 [dependencies]
-ricehtml = "0.1.0"
+ricehtml = "0.1.1"
 ```
 
 Full API reference: [API.md](API.md).
