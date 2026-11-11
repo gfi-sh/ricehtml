@@ -1,0 +1,21 @@
+[package]
+name = "ricehtml"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+description = "Build native desktop UIs from HTML + CSS with a DOM-like Rust API"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/gfi-sh/ricehtml"
+readme = "README.md"
+keywords = ["gui", "html", "css", "egui", "desktop"]
+categories = ["gui"]
+
+[dependencies]
+eframe = "0.31"
+tl = "0.7"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
+log = "0.4"
+
+[profile.release]
+lto = true
+codegen-units = 1
