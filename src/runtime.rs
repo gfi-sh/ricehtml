@@ -697,7 +697,7 @@ pub fn spawn_with<F: FnOnce(Document) + Send + 'static>(html: &str, opts: Option
     let dom = Dom::parse(html);
     let title = opts.title.clone()
         .or_else(|| dom.find_tag(ROOT, "title").map(|t| dom.text_content(t).trim().to_string()))
-        .unwrap_or_else(|| "RiceHTML".into());
+        .unwrap_or_else(|| "Untitled".into());
 
     let shared = Arc::new(Shared {
         dom: Mutex::new(dom),

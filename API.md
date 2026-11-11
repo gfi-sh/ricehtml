@@ -49,7 +49,6 @@ Same as `spawn`, with an `Options` struct:
 ricehtml::spawn_with(
     r#"<html><body>Hi</body></html>"#,
     ricehtml::Options {
-        title: Some("My App".into()),
         size: [1024.0, 768.0],
         bold_font: Some(include_bytes!("../assets/bold.ttf")),
     },
@@ -61,7 +60,6 @@ ricehtml::spawn_with(
 
 | Field | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `title` | `Option<String>` | `None` | Window title. Falls back to the `<title>` element, then `"RiceHTML"`. |
 | `size` | `[f32; 2]` | `[800.0, 600.0]` | Initial window size (width, height). |
 | `bold_font` | `Option<&'static [u8]>` | `None` | TTF/OTF font data used for `font-weight: bold` (egui ships no bold face). |
 

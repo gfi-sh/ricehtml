@@ -45,7 +45,6 @@ Use `spawn_with` to customize the window:
 ricehtml::spawn_with(
     html,
     ricehtml::Options {
-        title: Some("My App".into()),
         size: [1024.0, 768.0],
         ..Default::default()
     },
