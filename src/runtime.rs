@@ -880,13 +880,12 @@ pub fn document() -> Document { DOCUMENT.get().expect("ricehtml::document() call
 
 #[derive(Debug, Clone)]
 pub struct Options {
-    pub title: Option<String>,
     pub size: [f32; 2],
     /// TTF/OTF bytes used for `font-weight: bold` (egui ships no bold face).
     pub bold_font: Option<&'static [u8]>,
 }
 impl Default for Options {
-    fn default() -> Self { Options { title: None, size: [800.0, 600.0], bold_font: None } }
+    fn default() -> Self { Options { size: [800.0, 600.0], bold_font: None } }
 }
 
 pub fn spawn<F: FnOnce(Document) + Send + 'static>(html: &str, background: F) -> eframe::Result {
@@ -897,8 +896,8 @@ pub fn spawn<F: FnOnce(Document) + Send + 'static>(html: &str, background: F) ->
 /// on its own thread with a handle to the document.
 pub fn spawn_with<F: FnOnce(Document) + Send + 'static>(html: &str, opts: Options, background: F) -> eframe::Result {
     let dom = Dom::parse(html);
-    let title = opts.title.clone()
-        .or_else(|| dom.find_tag(ROOT, "title").map(|t| dom.text_content(t).trim().to_string()))
+    let title = dom.find_tag(ROOT, "title")
+        .map(|t| dom.text_content(t).trim().to_string())
         .unwrap_or_else(|| "Untitled".into());
 
     let shared = Arc::new(Shared {

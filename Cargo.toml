@@ -1,9 +1,9 @@
 [package]
 name = "ricehtml"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 rust-version = "1.88"
-description = "Build native desktop UIs from HTML + CSS with a DOM-like Rust API"
+description = "A truely lightweight Rust GUI library for HTML, CSS, and Rust apps."
 license = "GPL-3.0-or-later"
 repository = "https://github.com/gfi-sh/ricehtml"
 readme = "README.md"

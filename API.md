@@ -63,6 +63,10 @@ ricehtml::spawn_with(
 | `size` | `[f32; 2]` | `[800.0, 600.0]` | Initial window size (width, height). |
 | `bold_font` | `Option<&'static [u8]>` | `None` | TTF/OTF font data used for `font-weight: bold` (egui ships no bold face). |
 
+The window title is taken from the `<title>` tag in `<head>` (defaults to
+`"Untitled"`). Change it at runtime with
+[`document().set_title()`](#document).
+
 ### `document()`
 
 Returns a `Document` handle from anywhere in your program. Panics if called
