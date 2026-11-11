@@ -1,4 +1,4 @@
-use crate::css::{Display, Length, Position, Sheet, Style, Xform};
+use crate::css::{AlignItems, Display, JustifyContent, Length, Position, Sheet, Style, Xform};
 use crate::dom::{is_ws, Dom, Kind, NodeId, ROOT};
 use crate::runtime::{get_image, Msg, Shared};
 use eframe::egui::{
@@ -425,12 +425,10 @@ impl Drawer<'_> {
             if let Some(h) = hpx { ui.set_min_height(h); }
             if let Some(mh) = s.max_height { ui.set_max_height(ah.min(mh)); }
             if s.display == Display::Flex {
-                let gap = Vec2::splat(s.gap);
                 if s.flex_row {
-                    let f = |ui: &mut egui::Ui| { ui.spacing_mut().item_spacing = gap; this.items(ui, items, true); };
-                    if s.flex_wrap { ui.horizontal_wrapped(f).response.rect } else { ui.horizontal(f).response.rect }
+                    this.flex_row_layout(ui, items, s)
                 } else {
-                    ui.vertical(|ui| { ui.spacing_mut().item_spacing = gap; this.items(ui, items, false); }).response.rect
+                    this.flex_col_layout(ui, items, s)
                 }
             } else {
                 ui.vertical(|ui| { ui.spacing_mut().item_spacing = Vec2::ZERO; this.items(ui, items, false); }).response.rect
@@ -456,6 +454,341 @@ impl Drawer<'_> {
         } else {
             run(self, ui)
         }
+    }
+
+    /// Main-axis distribution for `justify-content`.
+    fn justify_spacing(&self, j: JustifyContent, free: f32, gap: f32, n: usize) -> (f32, f32) {
+        if n <= 1 { return (0.0, gap); }
+        match j {
+            JustifyContent::FlexStart => (0.0, gap),
+            JustifyContent::FlexEnd => (free, gap),
+            JustifyContent::Center => (free * 0.5, gap),
+            JustifyContent::SpaceBetween => (0.0, gap + free / (n - 1) as f32),
+            JustifyContent::SpaceAround => (free / (2.0 * n as f32), gap + free / n as f32),
+            JustifyContent::SpaceEvenly => (free / (n + 1) as f32, gap + free / (n + 1) as f32),
+        }
+    }
+
+    /// Custom flex-row layout: measure every item's width first (pure
+    /// measurement — nothing is painted), then place items left to right using
+    /// `justify-content` for main-axis distribution and `align-items` for the
+    /// cross axis. Cross-axis center/end alignment is applied after painting by
+    /// translating each item's shapes, so it stays exact regardless of the
+    /// height estimates used for `stretch`.
+    fn flex_row_layout(&mut self, ui: &mut egui::Ui, items: &mut [Item], s: &Style) -> egui::Rect {
+        let start = ui.cursor().min;
+        let avail_w = ui.available_width().max(0.0);
+        let avail_h = ui.available_height().max(1.0);
+        let right = ui.max_rect().right().max(start.x);
+        let gap = s.gap;
+        let wrap = s.flex_wrap;
+
+        let widths: Vec<f32> = items.iter().map(|it| self.measure_item(ui, it)).collect();
+        let n = widths.len();
+        let order: Vec<usize> = if s.flex_reverse { (0..n).rev().collect() } else { (0..n).collect() };
+        let widths: Vec<f32> = order.iter().map(|&i| widths[i]).collect();
+
+        // Split into lines (only when flex-wrap: wrap).
+        let mut lines: Vec<(usize, usize)> = vec![];
+        let mut li = 0;
+        for j in 0..n {
+            if wrap && j > li && start.x + widths[j] > right {
+                lines.push((li, j));
+                li = j;
+            }
+        }
+        lines.push((li, n));
+
+        let mut y = start.y;
+        let mut used = egui::Rect::NOTHING;
+        for (a, b) in lines {
+            let count = b - a;
+            let total: f32 = widths[a..b].iter().sum::<f32>() + gap * count.saturating_sub(1) as f32;
+            let free = (avail_w - total).max(0.0);
+            let (lead, between) = self.justify_spacing(s.justify_content, free, gap, count);
+
+            // Cross-axis stretch: allocate each item the (estimated) height of
+            // the tallest item in the line.
+            let stretch_h = if s.align_items == AlignItems::Stretch {
+                (a..b).map(|i| self.measure_item_h(ui, &items[order[i]], widths[i])).fold(0.0, f32::max)
+            } else { 0.0 };
+
+            let mut x = start.x + lead;
+            let layer = ui.layer_id();
+            let mut items_drawn: Vec<(ShapeIdx, ShapeIdx, usize, usize, f32)> = vec![];
+            for i in a..b {
+                let mw = widths[i].max(0.0);
+                let child_h = if stretch_h > 0.0 { stretch_h } else { avail_h };
+
+                // Stretch: temporarily fix the item's cross size (only when it
+                // has no explicit height).
+                let saved_h = match &mut items[order[i]] {
+                    Item::Box(b) if stretch_h > 0.0 && b.style.height == Length::Auto => {
+                        b.style.height = Length::Px(stretch_h);
+                        Some(Length::Auto)
+                    }
+                    _ => None,
+                };
+
+                let gstart = self.ctx.graphics(|g| g.get(layer).map_or(ShapeIdx(0), |l| l.next_idx()));
+                let hstart = self.hits.len();
+
+                let mut child = ui.new_child(egui::UiBuilder::new()
+                    .max_rect(egui::Rect::from_min_size(egui::pos2(x, y), egui::Vec2::new(mw, child_h))));
+                let r = match &mut items[order[i]] {
+                    Item::Box(b) => self.draw_box(&mut child, b, true),
+                    Item::Inline { segs, align } => { self.inline(&mut child, segs, *align); child.min_rect() }
+                };
+                let gend = self.ctx.graphics(|g| g.get(layer).map_or(ShapeIdx(0), |l| l.next_idx()));
+
+                if let Some(_) = saved_h {
+                    if let Item::Box(b) = &mut items[order[i]] { b.style.height = Length::Auto; }
+                }
+
+                items_drawn.push((gstart, gend, hstart, self.hits.len(), r.height()));
+                x += mw + between;
+            }
+
+            // Cross-axis alignment: the line height is only known after every
+            // item has been drawn, so translate each item's shapes and hit
+            // rects now. This keeps center/end alignment exact.
+            let line_h = if stretch_h > 0.0 {
+                stretch_h
+            } else {
+                items_drawn.iter().map(|d| d.4).fold(0.0, f32::max)
+            };
+            for (gstart, gend, hstart, hend, h) in items_drawn {
+                let dy = match s.align_items {
+                    AlignItems::Center => (line_h - h).max(0.0) * 0.5,
+                    AlignItems::FlexEnd => (line_h - h).max(0.0),
+                    _ => 0.0,
+                };
+                if dy > 0.0 {
+                    self.ctx.graphics_mut(|g| {
+                        g.entry(layer).transform_range(gstart, gend, TSTransform::from_translation(Vec2::new(0.0, dy)));
+                    });
+                    for h in &mut self.hits[hstart..hend] { h.rect.min.y += dy; h.rect.max.y += dy; }
+                }
+            }
+
+            let line_bottom = y + line_h;
+            let line_right = start.x + lead + total + (between - gap) * count.saturating_sub(1) as f32;
+            used = used.union(egui::Rect::from_min_max(egui::pos2(start.x, y), egui::pos2(line_right, line_bottom)));
+            y = line_bottom + gap;
+        }
+
+        if used.is_positive() {
+            ui.advance_cursor_after_rect(used);
+        } else {
+            ui.advance_cursor_after_rect(egui::Rect::from_min_size(start, egui::Vec2::ZERO));
+        }
+        used
+    }
+
+    /// Custom flex-column layout: items stack vertically (main axis) using
+    /// `justify-content` for spacing and `align-items` for horizontal
+    /// alignment. Heights are estimated before painting; horizontal
+    /// center/end alignment is applied exactly by translating painted shapes.
+    fn flex_col_layout(&mut self, ui: &mut egui::Ui, items: &mut [Item], s: &Style) -> egui::Rect {
+        let start = ui.cursor().min;
+        let content_w = ui.available_width().max(0.0);
+        let avail_h = match s.height {
+            Length::Px(v) => v.max(0.0),
+            _ => ui.available_height().max(0.0),
+        };
+        let gap = s.gap;
+
+        let widths: Vec<f32> = items.iter().map(|it| {
+            if s.align_items == AlignItems::Stretch { content_w } else { self.measure_item(ui, it) }
+        }).collect();
+        let heights: Vec<f32> = items.iter().zip(&widths).map(|(it, &w)| self.measure_item_h(ui, it, w)).collect();
+        let n = widths.len();
+        let order: Vec<usize> = if s.flex_reverse { (0..n).rev().collect() } else { (0..n).collect() };
+
+        let total_h: f32 = heights.iter().sum::<f32>() + gap * n.saturating_sub(1) as f32;
+        let free = (avail_h - total_h).max(0.0);
+        let (lead, between) = self.justify_spacing(s.justify_content, free, gap, n);
+
+        let mut y = start.y + lead;
+        let mut used = egui::Rect::NOTHING;
+        for &i in &order {
+            let mw = widths[i].max(0.0);
+            let layer = ui.layer_id();
+            let gstart = self.ctx.graphics(|g| g.get(layer).map_or(ShapeIdx(0), |l| l.next_idx()));
+            let hstart = self.hits.len();
+
+            let mut child = ui.new_child(egui::UiBuilder::new()
+                .max_rect(egui::Rect::from_min_size(egui::pos2(start.x, y), egui::Vec2::new(mw, avail_h.max(1.0)))));
+            let r = match &mut items[i] {
+                Item::Box(b) => self.draw_box(&mut child, b, false),
+                Item::Inline { segs, align } => { self.inline(&mut child, segs, *align); child.min_rect() }
+            };
+            let gend = self.ctx.graphics(|g| g.get(layer).map_or(ShapeIdx(0), |l| l.next_idx()));
+
+            // align-items on the cross (horizontal) axis.
+            let dx = match s.align_items {
+                AlignItems::Center => (content_w - r.width()).max(0.0) * 0.5,
+                AlignItems::FlexEnd => (content_w - r.width()).max(0.0),
+                _ => 0.0,
+            };
+            if dx > 0.0 {
+                self.ctx.graphics_mut(|g| {
+                    g.entry(layer).transform_range(gstart, gend, TSTransform::from_translation(Vec2::new(dx, 0.0)));
+                });
+                for h in &mut self.hits[hstart..] { h.rect.min.x += dx; h.rect.max.x += dx; }
+            }
+
+            let h = heights[i].max(r.height());
+            used = used.union(r.translate(Vec2::new(dx, 0.0)));
+            y += h + between;
+        }
+
+        used = used.union(egui::Rect::from_min_max(start, egui::pos2(start.x + content_w, y - between)));
+        if used.is_positive() {
+            ui.advance_cursor_after_rect(used);
+        } else {
+            ui.advance_cursor_after_rect(egui::Rect::from_min_size(start, egui::Vec2::ZERO));
+        }
+        used
+    }
+
+    /// Intrinsic (shrink-wrap) width of a row item, without painting anything.
+    fn measure_item(&mut self, ui: &egui::Ui, it: &Item) -> f32 {
+        match it {
+            Item::Box(b) => self.measure_box(ui, b),
+            Item::Inline { segs, .. } => segs.iter().map(|s| match s {
+                Seg::Text(job) => {
+                    let mut j = job.clone();
+                    j.wrap.max_width = f32::INFINITY;
+                    self.ctx.fonts(|f| f.layout_job(j)).size().x
+                }
+                Seg::Widget(b) => self.measure_box(ui, b),
+            }).fold(0.0, f32::max),
+        }
+    }
+
+    /// Intrinsic width of a box: explicit `width` wins; otherwise compute from
+    /// content (widget natural size / children), plus border, padding, margins.
+    fn measure_box(&mut self, ui: &egui::Ui, b: &RBox) -> f32 {
+        let s = b.style;
+        let fixed = match s.width {
+            Length::Px(w) => Some(w),
+            Length::Percent(p) => Some(ui.available_width() * p / 100.0),
+            Length::Auto => None,
+        };
+        let mut inner = fixed.unwrap_or_else(|| match &b.content {
+            Content::Widget(w) => self.measure_widget(ui, b, w),
+            Content::Hr => 0.0,
+            Content::Items(items) => {
+                if s.display == Display::Flex && s.flex_row {
+                    let mut t = 0.0;
+                    let mut first = true;
+                    for it in items {
+                        if !first { t += s.gap; }
+                        first = false;
+                        t += self.measure_item(ui, it);
+                    }
+                    t
+                } else {
+                    items.iter().map(|it| self.measure_item(ui, it)).fold(0.0, f32::max)
+                }
+            }
+        });
+        inner += s.padding[1] + s.padding[3] + 2.0 * s.border_width;
+        if let Length::Px(mn) = s.min_width { inner = inner.max(mn); }
+        if let Some(mx) = s.max_width { inner = inner.min(mx); }
+        inner + s.margin[1] + s.margin[3]
+    }
+
+    fn measure_widget(&mut self, ui: &egui::Ui, b: &RBox, w: &Widget) -> f32 {
+        let s = b.style;
+        let mut base = match w {
+            Widget::Button { text, .. } | Widget::Link { text, .. } => {
+                let family = if s.mono { FontFamily::Monospace } else { FontFamily::Proportional };
+                let g = ui.painter().layout_no_wrap(text.clone(), FontId::new(s.font_size, family), Color32::WHITE);
+                g.size().x + 12.0
+            }
+            Widget::Text { multiline, .. } => if *multiline { 240.0 } else { 160.0 },
+            Widget::Check { .. } => ui.spacing().interact_size.y,
+            Widget::Image { src } => match get_image(self.shared, src) {
+                Some(d) => d.w as f32,
+                None => match s.width { Length::Px(v) => v, _ => 100.0 },
+            },
+            Widget::Canvas { w, .. } => *w as f32,
+        };
+        if let Length::Px(v) = s.width { base = v; }
+        if let Length::Px(mn) = s.min_width { base = base.max(mn); }
+        if let Some(mx) = s.max_width { base = base.min(mx); }
+        base
+    }
+
+    /// Estimated (shrink-wrap) height of a row item when constrained to
+    /// `width` — used for cross-axis stretch and column layout. Nothing is
+    /// painted; the values approximate the real layout closely enough for
+    /// spacing decisions.
+    fn measure_item_h(&mut self, ui: &egui::Ui, it: &Item, width: f32) -> f32 {
+        match it {
+            Item::Box(b) => self.measure_box_h(ui, b, width),
+            Item::Inline { segs, .. } => segs.iter().map(|s| match s {
+                Seg::Text(job) => {
+                    let mut j = job.clone();
+                    j.wrap.max_width = width.max(1.0);
+                    self.ctx.fonts(|f| f.layout_job(j)).size().y
+                }
+                Seg::Widget(b) => self.measure_box_h(ui, b, width),
+            }).fold(0.0, f32::max),
+        }
+    }
+
+    fn measure_box_h(&mut self, ui: &egui::Ui, b: &RBox, width: f32) -> f32 {
+        let s = b.style;
+        let fixed = match s.height { Length::Px(v) => Some(v), _ => None };
+        let inner = fixed.unwrap_or_else(|| match &b.content {
+            Content::Widget(w) => self.measure_widget_h(ui, b, w),
+            Content::Hr => 8.0,
+            Content::Items(items) => {
+                let cw = (width - s.padding[1] - s.padding[3] - 2.0 * s.border_width
+                    - s.margin[1] - s.margin[3]).max(0.0);
+                if s.display == Display::Flex && s.flex_row {
+                    items.iter().map(|it| self.measure_item_h(ui, it, cw)).fold(0.0, f32::max)
+                } else {
+                    let mut t = 0.0;
+                    let mut first = true;
+                    for it in items {
+                        if !first { t += s.gap; }
+                        first = false;
+                        t += self.measure_item_h(ui, it, cw);
+                    }
+                    t
+                }
+            }
+        });
+        let inner = inner + s.padding[0] + s.padding[2] + 2.0 * s.border_width;
+        let inner = if let Length::Px(mn) = s.min_height { inner.max(mn) } else { inner };
+        let inner = if let Some(mx) = s.max_height { inner.min(mx) } else { inner };
+        inner + s.margin[0] + s.margin[2]
+    }
+
+    fn measure_widget_h(&mut self, ui: &egui::Ui, b: &RBox, w: &Widget) -> f32 {
+        let s = b.style;
+        let mut base = match w {
+            Widget::Button { text, .. } | Widget::Link { text, .. } => {
+                let family = if s.mono { FontFamily::Monospace } else { FontFamily::Proportional };
+                let g = ui.painter().layout_no_wrap(text.clone(), FontId::new(s.font_size, family), Color32::WHITE);
+                g.size().y + 8.0
+            }
+            Widget::Text { multiline, .. } => s.font_size * if *multiline { 3.0 } else { 2.0 },
+            Widget::Check { .. } => ui.spacing().interact_size.y,
+            Widget::Image { src } => match get_image(self.shared, src) {
+                Some(d) => d.h as f32,
+                None => match s.height { Length::Px(v) => v, _ => 100.0 },
+            },
+            Widget::Canvas { h, .. } => *h as f32,
+        };
+        if let Length::Px(v) = s.height { base = v; }
+        if let Length::Px(mn) = s.min_height { base = base.max(mn); }
+        if let Some(mx) = s.max_height { base = base.min(mx); }
+        base
     }
 
     /// Draw an out-of-flow (`absolute`/`fixed`) box against `area`. Drawn

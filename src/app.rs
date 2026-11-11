@@ -92,12 +92,37 @@ impl eframe::App for App {
         });
         out.extend(msgs);
 
-        // One hit-test per click instead of one interact() per element.
+        // One hit-test per click instead of one interact() per element. Clicks
+        // also set keyboard focus: focusable elements (inputs, buttons, links,
+        // ...) receive `keydown`/`keyup`; clicking anything else blurs.
         if ctx.input(|i| i.pointer.primary_clicked()) {
             if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
                 if let Some(h) = self.hits.iter().filter(|h| h.rect.contains(pos)).max_by_key(|h| h.depth) {
                     out.push(Msg::Click { target: h.id, x: pos.x, y: pos.y });
+                    let tag = self.shared.dom().tag(h.id).map(str::to_string).unwrap_or_default();
+                    let focusable = matches!(tag.as_str(), "input" | "textarea" | "select" | "button" | "a" | "label" | "canvas");
+                    self.shared.focus.store(if focusable { h.id } else { NO_HOVER }, Ordering::Relaxed);
+                } else {
+                    self.shared.focus.store(NO_HOVER, Ordering::Relaxed);
                 }
+            }
+        }
+
+        // Keyboard events: dispatch to the focused element (or, with no
+        // focus, to <body> — resolved in the event loop) so listeners on
+        // elements and on the document both receive keydown/keyup.
+        for ev in ctx.input(|i| i.events.clone()) {
+            if let egui::Event::Key { key, pressed, repeat, modifiers, .. } = ev {
+                out.push(Msg::Key {
+                    target: self.shared.focus.load(Ordering::Relaxed),
+                    key: crate::runtime::key_name(key, modifiers.shift),
+                    code: crate::runtime::code_name(key),
+                    pressed, repeat,
+                    shift: modifiers.shift,
+                    ctrl: modifiers.ctrl,
+                    alt: modifiers.alt,
+                    meta: modifiers.mac_cmd || modifiers.command,
+                });
             }
         }
         for m in out { let _ = self.tx.send(m); }

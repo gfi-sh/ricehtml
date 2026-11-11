@@ -17,6 +17,14 @@ pub enum Display { None, Inline, Block, Flex }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Position { Static, Relative, Absolute, Fixed }
 
+/// `align-items`: cross-axis alignment of flex items.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlignItems { Stretch, FlexStart, FlexEnd, Center }
+
+/// `justify-content`: main-axis distribution of flex items.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JustifyContent { FlexStart, FlexEnd, Center, SpaceBetween, SpaceAround, SpaceEvenly }
+
 /// Parsed `transform` — translate offset plus a uniform scale factor
 /// (egui's paint transforms are translation + uniform scaling only).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -67,7 +75,10 @@ pub struct Style {
     // flex
     pub flex_row: bool,
     pub flex_wrap: bool,
+    pub flex_reverse: bool,
     pub gap: f32,
+    pub align_items: AlignItems,
+    pub justify_content: JustifyContent,
 }
 
 impl Style {
@@ -81,7 +92,8 @@ impl Style {
             auto_lr: [false; 2], width: Length::Auto, height: Length::Auto,
             min_width: Length::Auto, min_height: Length::Auto, max_width: None, max_height: None,
             border_width: 0.0, border_color: Color32::GRAY, radius: 0.0,
-            flex_row: true, flex_wrap: false, gap: 0.0,
+            flex_row: true, flex_wrap: false, flex_reverse: false, gap: 0.0,
+            align_items: AlignItems::Stretch, justify_content: JustifyContent::FlexStart,
         }
     }
     pub fn inherit(p: &Style) -> Style {
@@ -453,8 +465,25 @@ fn apply(s: &mut Style, prop: &str, v: &str, parent_fs: f32) {
         "border-style" => if lv == "none" || lv == "hidden" { s.border_width = 0.0 },
         "border-radius" => if let Some(r) = tokens(v).first().and_then(|t| match parse_length(t, fs) {
             Some(Length::Px(p)) => Some(p), Some(Length::Percent(_)) => Some(255.0), _ => None }) { s.radius = r },
-        "flex-direction" => s.flex_row = !lv.starts_with("column"),
+        "flex-direction" => {
+            s.flex_row = !lv.starts_with("column");
+            s.flex_reverse = lv.ends_with("-reverse");
+        }
         "flex-wrap" => s.flex_wrap = lv.starts_with("wrap"),
+        "align-items" => s.align_items = match lv.as_str() {
+            "center" => AlignItems::Center,
+            "flex-end" | "end" => AlignItems::FlexEnd,
+            "flex-start" | "start" | "baseline" => AlignItems::FlexStart,
+            _ => AlignItems::Stretch,
+        },
+        "justify-content" => s.justify_content = match lv.as_str() {
+            "center" => JustifyContent::Center,
+            "flex-end" | "end" => JustifyContent::FlexEnd,
+            "space-between" => JustifyContent::SpaceBetween,
+            "space-around" => JustifyContent::SpaceAround,
+            "space-evenly" => JustifyContent::SpaceEvenly,
+            _ => JustifyContent::FlexStart,
+        },
         "gap" | "column-gap" | "row-gap" => if let Some(g) = tokens(v).first().and_then(|t| px(t, fs)) { s.gap = g },
         _ => {}
     }

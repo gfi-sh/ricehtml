@@ -21,6 +21,18 @@ pub(crate) enum Msg {
     Change { target: NodeId, checked: bool },
     /// `mouseenter` (hover started) / `mouseleave` (hover ended) — non-bubbling.
     Hover { enter: bool, target: NodeId },
+    /// Keyboard events (`keydown` / `keyup`), dispatched to the focused element.
+    Key {
+        target: NodeId,
+        key: String,
+        code: String,
+        pressed: bool,
+        shift: bool,
+        ctrl: bool,
+        alt: bool,
+        meta: bool,
+        repeat: bool,
+    },
 }
 
 type Listener = Arc<Mutex<dyn FnMut(&mut Event) + Send>>;
@@ -70,6 +82,9 @@ pub(crate) struct Shared {
     pub title: Mutex<Option<String>>,
     /// Node currently under the pointer (`usize::MAX` = none), for `:hover`.
     pub hover: std::sync::atomic::AtomicUsize,
+    /// Element with keyboard focus (`usize::MAX` = none). `keydown`/`keyup`
+    /// events target this element, or `<body>` when nothing is focused.
+    pub focus: std::sync::atomic::AtomicUsize,
     /// Elements whose UI state must be re-seeded from the DOM (programmatic
     /// `set_value` / `set_checked`).
     pub reset: Mutex<HashSet<NodeId>>,
@@ -109,6 +124,130 @@ impl Shared {
     }
 }
 
+// ------------------------------------------------------------------ key names
+
+/// JS-style `KeyboardEvent.key` string for an egui [`egui::Key`]. Letters
+/// are lowercase unless Shift is held (matching browsers).
+pub(crate) fn key_name(k: egui::Key, shift: bool) -> String {
+    use egui::Key as K;
+    match k {
+        K::ArrowDown => "ArrowDown".into(),
+        K::ArrowLeft => "ArrowLeft".into(),
+        K::ArrowRight => "ArrowRight".into(),
+        K::ArrowUp => "ArrowUp".into(),
+        K::Space => " ".into(),
+        K::Colon => ":".into(),
+        K::Comma => ",".into(),
+        K::Backslash => "\\".into(),
+        K::Slash => "/".into(),
+        K::Pipe => "|".into(),
+        K::Questionmark => "?".into(),
+        K::Exclamationmark => "!".into(),
+        K::OpenBracket => "[".into(),
+        K::CloseBracket => "]".into(),
+        K::OpenCurlyBracket => "{".into(),
+        K::CloseCurlyBracket => "}".into(),
+        K::Backtick => "`".into(),
+        K::Minus => "-".into(),
+        K::Period => ".".into(),
+        K::Plus => "+".into(),
+        K::Equals => "=".into(),
+        K::Semicolon => ";".into(),
+        K::Quote => "'".into(),
+        K::Num0 => "0".into(),
+        K::Num1 => "1".into(),
+        K::Num2 => "2".into(),
+        K::Num3 => "3".into(),
+        K::Num4 => "4".into(),
+        K::Num5 => "5".into(),
+        K::Num6 => "6".into(),
+        K::Num7 => "7".into(),
+        K::Num8 => "8".into(),
+        K::Num9 => "9".into(),
+        K::A => letter('a', shift),
+        K::B => letter('b', shift),
+        K::C => letter('c', shift),
+        K::D => letter('d', shift),
+        K::E => letter('e', shift),
+        K::F => letter('f', shift),
+        K::G => letter('g', shift),
+        K::H => letter('h', shift),
+        K::I => letter('i', shift),
+        K::J => letter('j', shift),
+        K::K => letter('k', shift),
+        K::L => letter('l', shift),
+        K::M => letter('m', shift),
+        K::N => letter('n', shift),
+        K::O => letter('o', shift),
+        K::P => letter('p', shift),
+        K::Q => letter('q', shift),
+        K::R => letter('r', shift),
+        K::S => letter('s', shift),
+        K::T => letter('t', shift),
+        K::U => letter('u', shift),
+        K::V => letter('v', shift),
+        K::W => letter('w', shift),
+        K::X => letter('x', shift),
+        K::Y => letter('y', shift),
+        K::Z => letter('z', shift),
+        other => other.name().to_string(), // Escape, Tab, Enter, Home, F1..F35, ...
+    }
+}
+
+/// JS-style `KeyboardEvent.code` string (physical key). egui exposes only
+/// logical keys here, so digits/letters use `Digit{n}` / `KeyX` names.
+pub(crate) fn code_name(k: egui::Key) -> String {
+    use egui::Key as K;
+    match k {
+        K::A => "KeyA".into(),
+        K::B => "KeyB".into(),
+        K::C => "KeyC".into(),
+        K::D => "KeyD".into(),
+        K::E => "KeyE".into(),
+        K::F => "KeyF".into(),
+        K::G => "KeyG".into(),
+        K::H => "KeyH".into(),
+        K::I => "KeyI".into(),
+        K::J => "KeyJ".into(),
+        K::K => "KeyK".into(),
+        K::L => "KeyL".into(),
+        K::M => "KeyM".into(),
+        K::N => "KeyN".into(),
+        K::O => "KeyO".into(),
+        K::P => "KeyP".into(),
+        K::Q => "KeyQ".into(),
+        K::R => "KeyR".into(),
+        K::S => "KeyS".into(),
+        K::T => "KeyT".into(),
+        K::U => "KeyU".into(),
+        K::V => "KeyV".into(),
+        K::W => "KeyW".into(),
+        K::X => "KeyX".into(),
+        K::Y => "KeyY".into(),
+        K::Z => "KeyZ".into(),
+        K::Num0 => "Digit0".into(),
+        K::Num1 => "Digit1".into(),
+        K::Num2 => "Digit2".into(),
+        K::Num3 => "Digit3".into(),
+        K::Num4 => "Digit4".into(),
+        K::Num5 => "Digit5".into(),
+        K::Num6 => "Digit6".into(),
+        K::Num7 => "Digit7".into(),
+        K::Num8 => "Digit8".into(),
+        K::Num9 => "Digit9".into(),
+        K::Space => "Space".into(),
+        K::ArrowDown => "ArrowDown".into(),
+        K::ArrowLeft => "ArrowLeft".into(),
+        K::ArrowRight => "ArrowRight".into(),
+        K::ArrowUp => "ArrowUp".into(),
+        other => other.name().to_string(),
+    }
+}
+
+fn letter(c: char, shift: bool) -> String {
+    if shift { c.to_ascii_uppercase() } else { c }.to_string()
+}
+
 // ------------------------------------------------------------------ Event
 
 pub struct Event {
@@ -123,6 +262,20 @@ pub struct Event {
     pub value: Option<String>,
     /// New state for `change` events on checkboxes.
     pub checked: Option<bool>,
+    /// The key for `keydown` / `keyup` events, e.g. `"a"`, `"Enter"`, `"ArrowUp"`, `" "`.
+    pub key: String,
+    /// The physical key code, e.g. `"KeyA"`, `"Digit1"`, `"Enter"`.
+    pub code: String,
+    /// Whether Shift is held (keyboard events).
+    pub shift_key: bool,
+    /// Whether Ctrl is held (keyboard events).
+    pub ctrl_key: bool,
+    /// Whether Alt is held (keyboard events).
+    pub alt_key: bool,
+    /// Whether the Meta/Command key is held (keyboard events).
+    pub meta_key: bool,
+    /// True for auto-repeated `keydown` events while a key is held.
+    pub repeat: bool,
     stopped: bool,
 }
 
@@ -130,23 +283,58 @@ impl Event {
     pub fn stop_propagation(&mut self) { self.stopped = true; }
 }
 
+fn base_event(shared: &Arc<Shared>, kind: &str, target: NodeId) -> Event {
+    Event {
+        kind: kind.to_string(),
+        target: Element::new(shared, Some(target)),
+        current_target: Element::new(shared, Some(target)),
+        x: 0.0, y: 0.0, value: None, checked: None,
+        key: String::new(), code: String::new(),
+        shift_key: false, ctrl_key: false, alt_key: false, meta_key: false,
+        repeat: false, stopped: false,
+    }
+}
+
 fn dispatch(shared: &Arc<Shared>, kind: &str, target: NodeId, x: f32, y: f32, value: Option<String>, checked: Option<bool>) {
-    dispatch_path(shared, kind, std::iter::successors(Some(target), |&n| shared.dom().parent(n)).collect(), target, x, y, value, checked)
+    let mut ev = base_event(shared, kind, target);
+    ev.x = x; ev.y = y; ev.value = value; ev.checked = checked;
+    let path: Vec<NodeId> = std::iter::successors(Some(target), |&n| shared.dom().parent(n)).collect();
+    dispatch_path(shared, path, ev);
 }
 
 fn dispatch_no_bubble(shared: &Arc<Shared>, kind: &str, target: NodeId) {
-    dispatch_path(shared, kind, vec![target], target, 0.0, 0.0, None, None);
+    dispatch_path(shared, vec![target], base_event(shared, kind, target));
 }
 
-fn dispatch_path(shared: &Arc<Shared>, kind: &str, path: Vec<NodeId>, target: NodeId, x: f32, y: f32, value: Option<String>, checked: Option<bool>) {
-    let mut ev = Event {
-        kind: kind.to_string(), target: Element::new(shared, Some(target)), current_target: Element::new(shared, Some(target)),
-        x, y, value, checked, stopped: false,
-    };
+fn dispatch_key(
+    shared: &Arc<Shared>,
+    kind: &str,
+    target: NodeId,
+    key: &str,
+    code: &str,
+    shift: bool,
+    ctrl: bool,
+    alt: bool,
+    meta: bool,
+    repeat: bool,
+) {
+    let mut ev = base_event(shared, kind, target);
+    ev.key = key.to_string();
+    ev.code = code.to_string();
+    ev.shift_key = shift;
+    ev.ctrl_key = ctrl;
+    ev.alt_key = alt;
+    ev.meta_key = meta;
+    ev.repeat = repeat;
+    let path: Vec<NodeId> = std::iter::successors(Some(target), |&n| shared.dom().parent(n)).collect();
+    dispatch_path(shared, path, ev);
+}
+
+fn dispatch_path(shared: &Arc<Shared>, path: Vec<NodeId>, mut ev: Event) {
     for node in path {
         let ls: Vec<Listener> = {
             let l = shared.listeners.lock().unwrap_or_else(|e| e.into_inner());
-            l.get(&node).and_then(|m| m.get(kind)).cloned().unwrap_or_default()
+            l.get(&node).and_then(|m| m.get(&ev.kind)).cloned().unwrap_or_default()
         };
         if ls.is_empty() { continue; }
         ev.current_target = Element::new(shared, Some(node));
@@ -156,6 +344,16 @@ fn dispatch_path(shared: &Arc<Shared>, kind: &str, path: Vec<NodeId>, target: No
             let _ = catch_unwind(AssertUnwindSafe(|| (*f)(&mut ev)));
         }
         if ev.stopped { break; }
+    }
+}
+
+/// Where keyboard events land: the focused element, or `<body>` (falling back
+/// to the document root) when nothing is focused.
+fn key_target(shared: &Shared, focus: NodeId) -> NodeId {
+    if focus == NO_HOVER {
+        shared.dom().find_tag(ROOT, "body").unwrap_or(ROOT)
+    } else {
+        focus
     }
 }
 
@@ -173,6 +371,10 @@ fn event_loop(shared: Arc<Shared>, rx: Receiver<Msg>) {
             }
             Msg::Hover { enter, target } => {
                 dispatch_no_bubble(&shared, if enter { "mouseenter" } else { "mouseleave" }, target);
+            }
+            Msg::Key { target, key, code, pressed, shift, ctrl, alt, meta, repeat } => {
+                let t = key_target(&shared, target);
+                dispatch_key(&shared, if pressed { "keydown" } else { "keyup" }, t, &key, &code, shift, ctrl, alt, meta, repeat);
             }
         }
     }
@@ -707,6 +909,7 @@ pub fn spawn_with<F: FnOnce(Document) + Send + 'static>(html: &str, opts: Option
         ctx: OnceLock::new(),
         title: Mutex::new(None),
         hover: std::sync::atomic::AtomicUsize::new(NO_HOVER),
+        focus: std::sync::atomic::AtomicUsize::new(NO_HOVER),
         reset: Mutex::new(HashSet::new()),
         images: Images::default(),
         canvases: Mutex::new(HashMap::new()),
@@ -739,4 +942,123 @@ pub fn spawn_with<F: FnOnce(Document) + Send + 'static>(html: &str, opts: Option
     }));
     shared.alive.store(false, Ordering::Relaxed);
     res
+}
+
+// ------------------------------------------------------------------ tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::Key as K;
+
+    #[test]
+    fn key_names() {
+        assert_eq!(key_name(K::Enter, false), "Enter");
+        assert_eq!(key_name(K::Space, false), " ");
+        assert_eq!(key_name(K::ArrowUp, false), "ArrowUp");
+        assert_eq!(key_name(K::ArrowDown, false), "ArrowDown");
+        assert_eq!(key_name(K::Escape, false), "Escape");
+        assert_eq!(key_name(K::Backspace, false), "Backspace");
+        assert_eq!(key_name(K::Tab, false), "Tab");
+        assert_eq!(key_name(K::F2, false), "F2");
+        assert_eq!(key_name(K::Home, false), "Home");
+        assert_eq!(key_name(K::Num1, false), "1");
+        assert_eq!(key_name(K::Period, false), ".");
+        assert_eq!(key_name(K::Slash, false), "/");
+        assert_eq!(key_name(K::A, false), "a");
+        assert_eq!(key_name(K::A, true), "A");
+        assert_eq!(key_name(K::Z, false), "z");
+        assert_eq!(key_name(K::Z, true), "Z");
+    }
+
+    #[test]
+    fn code_names() {
+        assert_eq!(code_name(K::A), "KeyA");
+        assert_eq!(code_name(K::Z), "KeyZ");
+        assert_eq!(code_name(K::Num0), "Digit0");
+        assert_eq!(code_name(K::Num9), "Digit9");
+        assert_eq!(code_name(K::Space), "Space");
+        assert_eq!(code_name(K::Enter), "Enter");
+        assert_eq!(code_name(K::ArrowLeft), "ArrowLeft");
+        assert_eq!(code_name(K::F12), "F12");
+    }
+
+    fn test_shared(html: &str) -> Arc<Shared> {
+        Arc::new(Shared {
+            dom: Mutex::new(Dom::parse(html)),
+            listeners: Mutex::new(HashMap::new()),
+            dirty: AtomicBool::new(false),
+            alive: AtomicBool::new(true),
+            ctx: OnceLock::new(),
+            title: Mutex::new(None),
+            hover: std::sync::atomic::AtomicUsize::new(NO_HOVER),
+            focus: std::sync::atomic::AtomicUsize::new(NO_HOVER),
+            reset: Mutex::new(HashSet::new()),
+            images: Images::default(),
+            canvases: Mutex::new(HashMap::new()),
+            canvas_drawing: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
+    #[test]
+    fn key_dispatch_targets_focus_and_bubbles() {
+        let shared = test_shared(r#"<html><body><div id="box"><input id="field"></div></body></html>"#);
+        let field = { let d = shared.dom(); d.find_tag(ROOT, "input").unwrap() };
+        let body = { let d = shared.dom(); d.find_tag(ROOT, "body").unwrap() };
+
+        // No focus → key events target <body>; focused input targets itself.
+        assert_eq!(key_target(&shared, NO_HOVER), body);
+        assert_eq!(key_target(&shared, field), field);
+
+        let field_events: Arc<Mutex<Vec<(String, String, bool, bool, bool, bool, bool)>>> = Arc::default();
+        {
+            let fe = field_events.clone();
+            Element::new(&shared, Some(field)).add_event_listener("keydown", move |ev: &mut Event| {
+                fe.lock().unwrap().push((
+                    ev.key.clone(), ev.code.clone(),
+                    ev.shift_key, ev.ctrl_key, ev.alt_key, ev.meta_key, ev.repeat,
+                ));
+            });
+        }
+
+        let doc_keyups: Arc<Mutex<usize>> = Arc::default();
+        {
+            let ku = doc_keyups.clone();
+            Element::new(&shared, Some(ROOT)).add_event_listener("keyup", move |ev: &mut Event| {
+                assert_eq!(ev.current_target.tag_name(), "#document");
+                *ku.lock().unwrap() += 1;
+            });
+        }
+
+        dispatch_key(&shared, "keydown", field, "A", "KeyA", true, false, false, false, true);
+        {
+            let fe = field_events.lock().unwrap();
+            assert_eq!(fe.len(), 1);
+            assert_eq!(fe[0], ("A".into(), "KeyA".into(), true, false, false, false, true));
+        }
+
+        // keyup bubbles all the way to the document root.
+        dispatch_key(&shared, "keyup", field, "Enter", "Enter", false, false, false, false, false);
+        assert_eq!(*doc_keyups.lock().unwrap(), 1);
+
+        // stop_propagation on <body> keeps the event from reaching the document.
+        let stops: Arc<Mutex<usize>> = Arc::default();
+        {
+            let st = stops.clone();
+            Element::new(&shared, Some(body)).add_event_listener("keydown", move |ev: &mut Event| {
+                ev.stop_propagation();
+                *st.lock().unwrap() += 1;
+            });
+        }
+        let doc_keydowns: Arc<Mutex<usize>> = Arc::default();
+        {
+            let kd = doc_keydowns.clone();
+            Element::new(&shared, Some(ROOT)).add_event_listener("keydown", move |_ev: &mut Event| {
+                *kd.lock().unwrap() += 1;
+            });
+        }
+        dispatch_key(&shared, "keydown", field, "a", "KeyA", false, false, false, false, false);
+        assert_eq!(*stops.lock().unwrap(), 1);
+        assert_eq!(*doc_keydowns.lock().unwrap(), 0);
+    }
 }

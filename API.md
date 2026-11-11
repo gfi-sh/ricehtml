@@ -163,7 +163,7 @@ chaining never panics.
 
 | Method | Description |
 | --- | --- |
-| `add_event_listener(kind, f)` | Register a listener. Supported `kind`s: `"click"`, `"input"`, `"change"`, `"mouseenter"`, `"mouseleave"`. Pointer events bubble; enter/leave do not. Handlers run on the dispatcher thread, never the UI thread. |
+| `add_event_listener(kind, f)` | Register a listener. Supported `kind`s: `"click"`, `"input"`, `"change"`, `"mouseenter"`, `"mouseleave"`, `"keydown"`, `"keyup"`. Pointer events bubble; enter/leave do not. Keyboard events target the focused element (the last clicked input/button/link/…, or `<body>` when nothing is focused) and bubble. Handlers run on the dispatcher thread, never the UI thread. |
 | `remove_event_listeners(kind)` | Remove all listeners for `kind` on this element. |
 
 ### Canvas
@@ -223,12 +223,16 @@ Passed to event listeners by mutable reference.
 
 | Field | Description |
 | --- | --- |
-| `kind` | Event name: `"click"`, `"input"`, `"change"`, `"mouseenter"`, `"mouseleave"`. |
+| `kind` | Event name: `"click"`, `"input"`, `"change"`, `"mouseenter"`, `"mouseleave"`, `"keydown"`, `"keyup"`. |
 | `target` | Innermost element that was hit. |
 | `current_target` | Element whose listener is currently running (differs from `target` while bubbling). |
 | `x`, `y` | Pointer position for click events. |
 | `value` | `Some(new_text)` for `input` events. |
 | `checked` | `Some(new_state)` for `change` events on checkboxes. |
+| `key` | The key for `keydown`/`keyup` events, e.g. `"a"`, `"Enter"`, `"ArrowUp"`, `" "`. Letters are lowercase unless Shift is held. |
+| `code` | Physical key code, e.g. `"KeyA"`, `"Digit1"`, `"Enter"`. |
+| `shift_key` / `ctrl_key` / `alt_key` / `meta_key` | Whether the given modifier was held for a keyboard event. |
+| `repeat` | `true` for auto-repeated `keydown` events while a key is held. |
 
 | Method | Description |
 | --- | --- |
@@ -340,7 +344,7 @@ Unsupported tags are ignored.
 
 ### CSS properties
 
-- **Display & layout**: `display` (block, inline, flex, none), `width`, `height`, `min-width`, `min-height`, `max-width`, `max-height` (px or %), `flex-direction`, `flex-wrap`, `gap`
+- **Display & layout**: `display` (block, inline, flex, none), `width`, `height`, `min-width`, `min-height`, `max-width`, `max-height` (px or %), `flex-direction` (row, column, and `*-reverse`), `flex-wrap`, `gap`, `justify-content` (flex-start, flex-end, center, space-between, space-around, space-evenly), `align-items` (stretch, flex-start, flex-end, center)
 - **Box**: `margin` / `margin-top|right|bottom|left` (including `auto`), `padding` / `padding-top|right|bottom|left`, `border`, `border-width`, `border-color`, `border-style`, `border-radius`
 - **Positioning**: `position` (relative, absolute, fixed), `top`, `right`, `bottom`, `left`
 - **Appearance**: `background`, `background-color`, `color`, `visibility`, `opacity`, `transform` (`translate()`, `scale()`)
@@ -349,7 +353,17 @@ Unsupported tags are ignored.
 ### Events
 
 `click`, `input`, `change` bubble up the tree; `mouseenter`, `mouseleave`
-do not.
+do not. `keydown`, `keyup` target the focused element (the last clicked
+input/button/link/…, or `<body>` when nothing is focused) and bubble, so
+listeners on the document receive all keyboard events, for example:
+
+```rust
+document.add_event_listener("keydown", |ev| {
+    if ev.key == "Enter" {
+        println!("Enter pressed (ctrl={})", ev.ctrl_key);
+    }
+});
+```
 
 ---
 
