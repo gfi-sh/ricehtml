@@ -44,7 +44,7 @@ Use `spawn_with` to customize the window:
 ```rust
 ricehtml::spawn_with(
     html,
-    ricehtml::Options {
+    ricehtml::Options { // use a title tag in the head tag to set window title
         size: [1024.0, 768.0],
         ..Default::default()
     },
